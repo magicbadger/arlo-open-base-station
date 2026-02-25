@@ -525,12 +525,10 @@ app.get('/api/stream/:serial/:file', (req, res) => {
     const serial = req.params.serial;
     const file = req.params.file;
 
-    // Security check: ensure filename doesn't contain path traversal
-    if (file.includes('..') || file.includes('/') || serial.includes('..') || serial.includes('/')) {
+    const filePath = safeFilePath('/tmp/arlo-stream', path.join(serial, file));
+    if (!filePath) {
         return res.status(400).json({ error: 'Invalid path' });
     }
-
-    const filePath = path.join('/tmp/arlo-stream', serial, file);
 
     // Check if file exists
     if (!fs.existsSync(filePath)) {

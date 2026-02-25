@@ -32,7 +32,7 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_BASE_DIR, 'arlo.db')
 
 with open(r'config.yaml') as file:
-        config = yaml.load(file, Loader=yaml.FullLoader)
+        config = yaml.load(file, Loader=yaml.SafeLoader)
 
 # Load camera aliases from config and set in camera module
 import arlo.camera
@@ -64,6 +64,7 @@ AUDIO_RECORDING_TIMEOUT=config['AudioRecordingTimeout']
 RECORDING_BASE_PATH=config['RecordingBasePath']
 RECORD_ON_MOTION_ALERT=config['RecordOnMotionAlert']
 RECORD_ON_AUDIO_ALERT=config['RecordOnAudioAlert']
+CAMERA_SERVER_BIND_ADDRESS=config.get('CameraServerBindAddress', '')
 
 def generate_thumbnail(video_filename):
     """Generate thumbnail from video file using ffmpeg"""
@@ -344,7 +345,7 @@ class ServerThread(threading.Thread):
         threads = []
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_address = ('', 4000)
+            server_address = (CAMERA_SERVER_BIND_ADDRESS, 4000)
             sock.bind(server_address)
 
             sock.listen(12)

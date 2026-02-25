@@ -1,4 +1,10 @@
 WifiCountryCode: "US"
+
+# Bind address for the camera control server (TCP port 4000).
+# Default ("") binds to all interfaces. Set this to your WiFi AP-facing
+# interface IP (e.g. "192.168.1.1") to restrict camera connections to that
+# interface only and prevent exposure on your LAN/ethernet side.
+CameraServerBindAddress: ""
 MotionRecordingTimeout: 120
 AudioRecordingTimeout: 10
 RecordOnMotionAlert: true

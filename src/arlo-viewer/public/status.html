@@ -318,6 +318,16 @@
     </div>
 
     <script>
+        function escapeHtml(str) {
+            if (str == null) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         function getBatteryClass(percent) {
             if (percent >= 50) return 'battery-high';
             if (percent >= 25) return 'battery-medium';
@@ -461,15 +471,15 @@
                     });
 
                     container.innerHTML = cameras.map(camera => `
-                        <div class="camera-card" data-serial="${camera.serial_number}">
+                        <div class="camera-card" data-serial="${escapeHtml(camera.serial_number)}">
                             <div class="camera-header">
-                                <div class="camera-name">${camera.friendly_name}</div>
+                                <div class="camera-name">${escapeHtml(camera.friendly_name)}</div>
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <span style="font-size: 11px; color: #6b7280;">${formatSleepTime(camera.last_seen)}</span>
                                     <div class="status-badge ${camera.online ? 'status-online' : 'status-offline'}">
                                         ${camera.online ? 'Online' : 'Offline'}
                                     </div>
-                                    ${camera.online ? `<button class="live-button" onclick="openStreamWindow('${camera.serial_number}', '${camera.friendly_name}')">Live</button>` : ''}
+                                    ${camera.online ? `<button class="live-button" data-serial="${escapeHtml(camera.serial_number)}" data-name="${escapeHtml(camera.friendly_name)}" onclick="openStreamWindow(this.dataset.serial, this.dataset.name)">Live</button>` : ''}
                                 </div>
                             </div>
 
@@ -526,17 +536,17 @@
 
                             <div class="stat-row">
                                 <span class="stat-label">IP Address</span>
-                                <span class="stat-value">${camera.ip || '—'}</span>
+                                <span class="stat-value">${escapeHtml(camera.ip) || '—'}</span>
                             </div>
 
                             <div class="stat-row">
                                 <span class="stat-label">Hostname</span>
-                                <span class="stat-value">${camera.hostname || '—'}</span>
+                                <span class="stat-value">${escapeHtml(camera.hostname) || '—'}</span>
                             </div>
 
                             <div class="stat-row">
                                 <span class="stat-label">MAC Address</span>
-                                <span class="stat-value" style="font-size: 12px; font-family: monospace;">${camera.mac_address || '—'}</span>
+                                <span class="stat-value" style="font-size: 12px; font-family: monospace;">${escapeHtml(camera.mac_address) || '—'}</span>
                             </div>
 
                             <div class="stat-row">
