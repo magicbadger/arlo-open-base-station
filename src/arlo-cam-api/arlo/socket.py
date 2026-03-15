@@ -3,6 +3,18 @@ import json
 
 from arlo.messages import Message
 
+_INCOMING_KEY_MAP = {
+    'messagetype':        'Type',
+    'id':                 'ID',
+    'systemserialnumber': 'SystemSerialNumber',
+    'systemmodelnum':     'SystemModelNumber',
+    'alerttype':          'AlertType',
+    'batterylevel':       'BatPercent',
+    'response':           'Response',
+    'pirmotion':          'PIRMotion',
+}
+_OUTGOING_KEY_MAP = {v: k for k, v in _INCOMING_KEY_MAP.items()}
+
 class ArloSocket:
 
     def __init__(self, sock=None):
@@ -15,8 +27,13 @@ class ArloSocket:
     def connect(self, host, port):
         self.sock.connect((host, port))
 
-    def send(self, message):
-        self.sock.sendall(message.toNetworkMessage())
+    def send(self, message, lowercase=False):
+        if lowercase:
+            data = {_OUTGOING_KEY_MAP.get(k, k): v for k, v in message.dictionary.items()}
+            msg = Message(data)
+        else:
+            msg = message
+        self.sock.sendall(msg.toNetworkMessage())
 
     def receive(self):
         data = self.sock.recv(1024).decode(encoding="utf-8")
@@ -35,7 +52,10 @@ class ArloSocket:
             chunk_str = chunk.decode(encoding="utf-8")
             json_data += chunk_str
             read = read + len(chunk_str)
-        return Message(json.loads(json_data))
+        data = json.loads(json_data)
+        if 'messagetype' in data:
+            data = {_INCOMING_KEY_MAP.get(k, k): v for k, v in data.items()}
+        return Message(data)
 
     def close(self):
         self.sock.close()

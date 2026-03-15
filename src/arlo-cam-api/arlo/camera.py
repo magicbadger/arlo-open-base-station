@@ -29,6 +29,8 @@ class Camera:
         # Use alias from config if available, otherwise fall back to serial number
         self.friendly_name = CAMERA_ALIASES.get(self.serial_number, self.serial_number)
         self.armed = 1  # Default to armed state
+        model = registration.dictionary.get('SystemModelNumber', '')
+        self.protocol_lowercase = model.upper().startswith('VMC2030')
 
     def __getitem__(self,key):
         return self.registration[key]
@@ -48,8 +50,8 @@ class Camera:
                 arloSock = ArloSocket(sock)
                 self.id += 1
                 message['ID'] = self.id
-                s_print(f">[{self.ip}][{self.id}] {message['Type']}")
-                arloSock.send(message)
+                s_print(f">[{self.ip}][{self.id}] {message.dictionary.get('Type', message.dictionary.get('messagetype', '?'))}")
+                arloSock.send(message, lowercase=self.protocol_lowercase)
                 ack = arloSock.receive()
                 if (ack != None):
                     if (ack['ID']==message['ID']):

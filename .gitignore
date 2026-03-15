@@ -2,6 +2,11 @@
 config/install.conf
 config/config.yaml
 
+# Docker — generated secrets and certs (not committed)
+docker/.env
+docker/config.yaml
+docker/certs/
+
 # Node modules
 node_modules/
 

@@ -16,6 +16,8 @@ if (!process.env.AUTH_PASSWORD || !process.env.AUTH_SECRET || !process.env.THUMB
     process.exit(1);
 }
 
+const FLASK_API_HOST = process.env.FLASK_API_HOST || 'localhost';
+
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
 const AUTH_COOKIE_NAME = 'arlo_auth';
 const AUTH_SECRET = process.env.AUTH_SECRET;
@@ -136,7 +138,7 @@ app.use(express.json());
 // Proxy for camera status API (Flask runs on port 5000)
 app.get('/api/cameras/status', (req, res) => {
     const http = require('http');
-    http.get('http://localhost:5000/cameras/status', (apiRes) => {
+    http.get(`http://${FLASK_API_HOST}:5000/cameras/status`, (apiRes) => {
         let data = '';
         apiRes.on('data', (chunk) => data += chunk);
         apiRes.on('end', () => {
@@ -160,7 +162,7 @@ app.post('/api/camera/:serial/arm', (req, res) => {
     });
 
     const options = {
-        hostname: 'localhost',
+        hostname: FLASK_API_HOST,
         port: 5000,
         path: `/camera/${serial}/arm`,
         method: 'POST',
@@ -199,7 +201,7 @@ app.post('/api/camera/:serial/disarm', (req, res) => {
     });
 
     const options = {
-        hostname: 'localhost',
+        hostname: FLASK_API_HOST,
         port: 5000,
         path: `/camera/${serial}/arm`,
         method: 'POST',
@@ -453,7 +455,7 @@ app.post('/api/camera/:serial/stream/start', (req, res) => {
     const serial = req.params.serial;
 
     const options = {
-        hostname: 'localhost',
+        hostname: FLASK_API_HOST,
         port: 5000,
         path: `/camera/${serial}/stream/start`,
         method: 'POST'
@@ -481,7 +483,7 @@ app.post('/api/camera/:serial/stream/stop', (req, res) => {
     const serial = req.params.serial;
 
     const options = {
-        hostname: 'localhost',
+        hostname: FLASK_API_HOST,
         port: 5000,
         path: `/camera/${serial}/stream/stop`,
         method: 'POST'
@@ -508,7 +510,7 @@ app.get('/api/camera/:serial/stream/status', (req, res) => {
     const http = require('http');
     const serial = req.params.serial;
 
-    http.get(`http://localhost:5000/camera/${serial}/stream/status`, (apiRes) => {
+    http.get(`http://${FLASK_API_HOST}:5000/camera/${serial}/stream/status`, (apiRes) => {
         let data = '';
         apiRes.on('data', (chunk) => data += chunk);
         apiRes.on('end', () => {

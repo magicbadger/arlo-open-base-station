@@ -1,3 +1,4 @@
+import os
 import socket
 import sys
 import json
@@ -28,7 +29,7 @@ logging.basicConfig(
     ]
 )
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_BASE_DIR = os.environ.get('ARLO_DATA_DIR', os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(_BASE_DIR, 'arlo.db')
 
 with open(r'config.yaml') as file:
@@ -42,11 +43,16 @@ webhook_manager = WebHookManager(config)
 
 with sqlite3.connect(DB_PATH) as conn:
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS camera (ip text, serialnumber text, hostname text, status text, register_set text, friendlyname text)")
+    c.execute("CREATE TABLE IF NOT EXISTS camera (ip text, serialnumber text, hostname text, status text, register_set text, friendlyname text, last_seen text, mac_address text, connected integer, armed integer)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_serialnumber ON camera (serialnumber)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_ip ON camera (ip)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_friendlyname ON camera (friendlyname)")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_hostname ON camera (hostname)")
+    # Migrate existing databases that are missing columns
+    existing_columns = {row[1] for row in c.execute("PRAGMA table_info(camera)")}
+    for col, typedef in [("last_seen", "text"), ("mac_address", "text"), ("connected", "integer"), ("armed", "integer")]:
+        if col not in existing_columns:
+            c.execute(f"ALTER TABLE camera ADD COLUMN {col} {typedef}")
     conn.commit()
 
 recorder_lock = threading.Lock()
@@ -209,131 +215,166 @@ class ConnectionThread(threading.Thread):
         self.connection = ArloSocket(connection)
         self.ip = ip
         self.port = port
+        self.is_persistent = False  # True for VMC2030B cameras (persistent connection)
 
     def run(self):
+        s_print(f"[{self.ip}] TCP connection accepted on port 4000")
         while True:
             timestr = time.strftime("%Y%m%d-%H%M%S")
-            msg = self.connection.receive()
-            if msg != None:
-                # RAW MESSAGE LOGGING - see everything camera sends (disabled - too verbose)
-                # logging.info(f"RAW MESSAGE from {self.ip}: {json.dumps(msg.dictionary, indent=2)}")
+            try:
+                msg = self.connection.receive()
+            except Exception as e:
+                s_print(f"[{self.ip}] Connection closed: {e}")
+                break
+            if msg is None:
+                s_print(f"[{self.ip}] Connection closed: non-L: message or empty read")
+                break
 
-                if (msg['Type'] == "registration"):
-                    camera = Camera.from_db_serial(msg['SystemSerialNumber'])
-                    is_new_camera = camera is None
-                    if is_new_camera:
-                        camera = Camera(self.ip, msg)
-                        # New camera defaults to armed state
-                        camera.armed = 1
-                    else:
-                        camera.registration = msg
-                        # Preserve existing armed state for known cameras
-                    camera.persist()
-                    s_print(f"<[{self.ip}][{msg['ID']}] Registration from {msg['SystemSerialNumber']} - {camera.hostname}")
-                    if msg['SystemModelNumber'] ==  'VMC5040':
-                        registerSet = Message(arlo.messages.REGISTER_SET_INITIAL_ULTRA)
-                    else:
-                        registerSet = Message(arlo.messages.REGISTER_SET_INITIAL)
-                    registerSet['WifiCountryCode'] = WIFI_COUNTRY_CODE
+            # RAW MESSAGE LOGGING - see everything camera sends (disabled - too verbose)
+            # logging.info(f"RAW MESSAGE from {self.ip}: {json.dumps(msg.dictionary, indent=2)}")
 
-                    # Apply current armed state to registration message
-                    if camera.armed == 0:
-                        # User wants camera disarmed - override REGISTER_SET_INITIAL defaults
-                        registerSet['PIRTargetState'] = 0
-                        registerSet['VideoMotionEstimationEnable'] = 0
-                        registerSet['AudioTargetState'] = 0
-                    # else: keep REGISTER_SET_INITIAL defaults (Armed, VME enabled, Audio disarmed)
+            handled_inline = False  # True if ACK was already sent inline (VMC2030B registration)
 
-                    camera.send_message(registerSet)
-                elif (msg['Type'] == "status"):
-                    s_print(f"<[{self.ip}][{msg['ID']}] Status from {msg['SystemSerialNumber']}")
-                    camera = Camera.from_db_serial(msg['SystemSerialNumber'])
-                    camera.ip = self.ip
-                    camera.status = msg
-                    camera.persist()
-
-                    # Check battery level and send warnings if enabled
-                    if config.get('BatteryWarningEnabled', False):
-                        battery_percent = msg.dictionary.get('BatPercent')
-                        if battery_percent is not None:
-                            serial = camera.serial_number
-                            warning_low = config.get('BatteryWarningLow', 25)
-                            warning_critical = config.get('BatteryWarningCritical', 10)
-
-                            with battery_warning_lock:
-                                last_warned = battery_warning_state.get(serial)
-
-                                # Check critical threshold (10%)
-                                if battery_percent <= warning_critical and last_warned != 'critical':
-                                    webhook_manager.send_battery_warning(
-                                        camera.friendly_name, camera.hostname, serial,
-                                        battery_percent, is_critical=True
-                                    )
-                                    battery_warning_state[serial] = 'critical'
-
-                                # Check low threshold (25%) - only if not already critical
-                                elif battery_percent <= warning_low and last_warned is None:
-                                    webhook_manager.send_battery_warning(
-                                        camera.friendly_name, camera.hostname, serial,
-                                        battery_percent, is_critical=False
-                                    )
-                                    battery_warning_state[serial] = 'low'
-
-                                # Reset warning state if battery recovers above low threshold
-                                elif battery_percent > warning_low and last_warned is not None:
-                                    s_print(f"[BATTERY] {camera.friendly_name} recovered to {battery_percent}% - resetting warnings")
-                                    battery_warning_state[serial] = None
-                elif (msg['Type'] == "alert"):
-                    camera = Camera.from_db_ip(self.ip)
-                    alert_type = msg['AlertType']
-                    s_print(f"<[{self.ip}][{msg['ID']}] {msg['AlertType']}")
-
-                    # For pirMotionAlert: ACK immediately, then monitor port and record
-                    if alert_type == "pirMotionAlert" and RECORD_ON_MOTION_ALERT:
-                       s_print(f"[{self.ip}] Motion detected - ACK first, then monitor for stream")
-
-                       # Send ACK immediately
-                       ack = Message(arlo.messages.RESPONSE)
-                       ack['ID'] = msg['ID']
-                       s_print(f">[{self.ip}][{msg['ID']}] Ack (immediate)")
-                       self.connection.send(ack)
-
-                       # Spawn background thread to monitor port and record
-                       filename = f"{RECORDING_BASE_PATH}arlo-{camera.serial_number}-{timestr}.mkv"
-                       rtsp_url = f"rtsp://{self.ip}/live"
-                       zones = msg['PIRMotion'].get('zones', '')
-
-                       monitor_thread = threading.Thread(
-                           target=monitor_and_record,
-                           args=(self.ip, rtsp_url, filename, camera.serial_number, zones, webhook_manager, camera.friendly_name, camera.hostname),
-                           daemon=True
-                       )
-                       monitor_thread.start()
-                       s_print(f"[{self.ip}] Monitoring thread started for recording")
-
-                       # Close connection and exit - monitoring thread handles recording
-                       self.connection.close()
-                       break
-                    elif alert_type == "audioAlert" and RECORD_ON_AUDIO_ALERT:
-                       recorder = Recorder(self.ip, f"{RECORDING_BASE_PATH}{camera.serial_number}_{timestr}_audio.mpg", AUDIO_RECORDING_TIMEOUT)
-                       with recorder_lock:
-                           if self.ip in recorders:
-                               recorders[self.ip].stop()
-                           recorders[self.ip] = recorder
-                       recorder.run()
-                    elif alert_type == "motionTimeoutAlert":
-                       with recorder_lock:
-                           if self.ip in recorders and recorders[self.ip] is not None:
-                               recorders[self.ip].stop()
-                               del recorders[self.ip]
+            if (msg['Type'] == "registration"):
+                camera = Camera.from_db_serial(msg['SystemSerialNumber'])
+                is_new_camera = camera is None
+                if is_new_camera:
+                    camera = Camera(self.ip, msg)
+                    # New camera defaults to armed state
+                    camera.armed = 1
                 else:
-                    s_print(f"<[{self.ip}][{msg['ID']}] Unknown message")
-                    s_print(msg)
+                    camera.registration = msg
+                    # Preserve existing armed state for known cameras
+                camera.persist()
+                s_print(f"<[{self.ip}][{msg['ID']}] Registration from {msg['SystemSerialNumber']} - {camera.hostname}")
+                if msg['SystemModelNumber'] == 'VMC5040':
+                    registerSet = Message(arlo.messages.REGISTER_SET_INITIAL_ULTRA)
+                elif msg['SystemModelNumber'].upper().startswith('VMC2030'):
+                    registerSet = Message(arlo.messages.REGISTER_SET_INITIAL_VMC2030)
+                else:
+                    registerSet = Message(arlo.messages.REGISTER_SET_INITIAL)
+                registerSet['WifiCountryCode'] = WIFI_COUNTRY_CODE
 
+                # Apply current armed state to registration message
+                if camera.armed == 0:
+                    # User wants camera disarmed - override REGISTER_SET_INITIAL defaults
+                    registerSet['PIRTargetState'] = 0
+                    registerSet['VideoMotionEstimationEnable'] = 0
+                    registerSet['AudioTargetState'] = 0
+                # else: keep REGISTER_SET_INITIAL defaults (Armed, VME enabled, Audio disarmed)
+
+                if camera.protocol_lowercase:
+                    # VMC2030B: send ACK + registerSet on the same inbound connection
+                    self.is_persistent = True
+                    ack = Message(arlo.messages.RESPONSE)
+                    ack['ID'] = msg['ID']
+                    self.connection.send(ack, lowercase=True)
+                    camera.id += 1
+                    registerSet['ID'] = camera.id
+                    self.connection.send(registerSet, lowercase=True)
+                    try:
+                        reg_ack = self.connection.receive()
+                        s_print(f"<[{self.ip}][{camera.id}] registerSet ack: {reg_ack.dictionary if reg_ack else None}")
+                    except Exception as e:
+                        s_print(f"[{self.ip}] Exception receiving registerSet ack: {e}")
+                    handled_inline = True
+                else:
+                    # Older cameras: send registerSet via new connection back to camera
+                    camera.send_message(registerSet)
+
+            elif (msg['Type'] == "status"):
+                s_print(f"<[{self.ip}][{msg['ID']}] Status from {msg['SystemSerialNumber']}")
+                camera = Camera.from_db_serial(msg['SystemSerialNumber'])
+                camera.ip = self.ip
+                camera.status = msg
+                camera.persist()
+
+                # Check battery level and send warnings if enabled
+                if config.get('BatteryWarningEnabled', False):
+                    battery_percent = msg.dictionary.get('BatPercent')
+                    if battery_percent is not None:
+                        serial = camera.serial_number
+                        warning_low = config.get('BatteryWarningLow', 25)
+                        warning_critical = config.get('BatteryWarningCritical', 10)
+
+                        with battery_warning_lock:
+                            last_warned = battery_warning_state.get(serial)
+
+                            # Check critical threshold (10%)
+                            if battery_percent <= warning_critical and last_warned != 'critical':
+                                webhook_manager.send_battery_warning(
+                                    camera.friendly_name, camera.hostname, serial,
+                                    battery_percent, is_critical=True
+                                )
+                                battery_warning_state[serial] = 'critical'
+
+                            # Check low threshold (25%) - only if not already critical
+                            elif battery_percent <= warning_low and last_warned is None:
+                                webhook_manager.send_battery_warning(
+                                    camera.friendly_name, camera.hostname, serial,
+                                    battery_percent, is_critical=False
+                                )
+                                battery_warning_state[serial] = 'low'
+
+                            # Reset warning state if battery recovers above low threshold
+                            elif battery_percent > warning_low and last_warned is not None:
+                                s_print(f"[BATTERY] {camera.friendly_name} recovered to {battery_percent}% - resetting warnings")
+                                battery_warning_state[serial] = None
+
+            elif (msg['Type'] == "alert"):
+                camera = Camera.from_db_ip(self.ip)
+                alert_type = msg['AlertType']
+                s_print(f"<[{self.ip}][{msg['ID']}] {msg['AlertType']}")
+
+                # For pirMotionAlert: ACK immediately, then monitor port and record
+                if alert_type == "pirMotionAlert" and RECORD_ON_MOTION_ALERT:
+                   s_print(f"[{self.ip}] Motion detected - ACK first, then monitor for stream")
+
+                   # Send ACK immediately
+                   ack = Message(arlo.messages.RESPONSE)
+                   ack['ID'] = msg['ID']
+                   s_print(f">[{self.ip}][{msg['ID']}] Ack (immediate)")
+                   self.connection.send(ack, lowercase=self.is_persistent)
+
+                   # Spawn background thread to monitor port and record
+                   filename = f"{RECORDING_BASE_PATH}arlo-{camera.serial_number}-{timestr}.mkv"
+                   rtsp_url = f"rtsp://{self.ip}/live"
+                   zones = msg['PIRMotion'].get('zones', '')
+
+                   monitor_thread = threading.Thread(
+                       target=monitor_and_record,
+                       args=(self.ip, rtsp_url, filename, camera.serial_number, zones, webhook_manager, camera.friendly_name, camera.hostname),
+                       daemon=True
+                   )
+                   monitor_thread.start()
+                   s_print(f"[{self.ip}] Monitoring thread started for recording")
+
+                   # Close connection and exit - monitoring thread handles recording
+                   self.connection.close()
+                   break
+                elif alert_type == "audioAlert" and RECORD_ON_AUDIO_ALERT:
+                   recorder = Recorder(self.ip, f"{RECORDING_BASE_PATH}{camera.serial_number}_{timestr}_audio.mpg", AUDIO_RECORDING_TIMEOUT)
+                   with recorder_lock:
+                       if self.ip in recorders:
+                           recorders[self.ip].stop()
+                       recorders[self.ip] = recorder
+                   recorder.run()
+                elif alert_type == "motionTimeoutAlert":
+                   with recorder_lock:
+                       if self.ip in recorders and recorders[self.ip] is not None:
+                           recorders[self.ip].stop()
+                           del recorders[self.ip]
+            else:
+                s_print(f"<[{self.ip}][{msg['ID']}] Unknown message")
+                s_print(msg)
+
+            if not handled_inline:
                 ack = Message(arlo.messages.RESPONSE)
                 ack['ID'] = msg['ID']
                 s_print(f">[{self.ip}][{msg['ID']}] Ack")
-                self.connection.send(ack)
+                self.connection.send(ack, lowercase=self.is_persistent)
+
+            if not self.is_persistent:
                 self.connection.close()
                 break
 

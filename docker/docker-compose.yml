@@ -1,0 +1,54 @@
+# Arlo Open Base Station — Docker Compose
+# Run from the docker/ directory: docker compose up
+# One-time setup: bash setup.sh
+
+services:
+  cam-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cam-api
+    extra_hosts:
+      - "gateway.arlo:${HOST_IP}"
+    ports:
+      - "4000:4000"         # Camera control protocol
+      - "53:53/udp"         # DNS: resolves gateway.arlo → HOST_IP
+    volumes:
+      - arlo_data:/data                          # SQLite DB (persists across restarts)
+      - arlo_recordings:/recordings              # Video recordings
+      - arlo_stream:/tmp/arlo-stream             # HLS live-stream segments (shared with viewer)
+      - ./config.yaml:/app/config.yaml:ro        # User-edited config
+    environment:
+      - HOST_IP=${HOST_IP}                       # Windows PC WiFi IP (set in .env)
+      - ARLO_DATA_DIR=/data                      # DB stored in named volume
+      - VLC_VERBOSE=-1                           # Suppress VLC output
+    restart: unless-stopped
+
+  viewer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.viewer
+    extra_hosts:
+      - "gateway.arlo:${HOST_IP}"
+    ports:
+      - "3003:3003"         # HTTPS web UI
+    volumes:
+      - arlo_recordings:/recordings:ro           # Read recordings
+      - arlo_stream:/tmp/arlo-stream:ro          # Serve live HLS segments
+      - ./config.yaml:/opt/arlo-cam-api/config.yaml:ro   # Camera aliases
+      - ./certs:/certs:ro                        # TLS certificate
+    environment:
+      - FLASK_API_HOST=cam-api                   # Internal Docker DNS name for cam-api
+      - RECORDINGS_DIR=/recordings
+      - AUTH_PASSWORD=${AUTH_PASSWORD}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - THUMBNAIL_SECRET=${THUMBNAIL_SECRET}
+      - TLS_KEY=/certs/key.pem
+      - TLS_CERT=/certs/cert.pem
+    depends_on:
+      - cam-api
+    restart: unless-stopped
+
+volumes:
+  arlo_data:
+  arlo_recordings:
+  arlo_stream:

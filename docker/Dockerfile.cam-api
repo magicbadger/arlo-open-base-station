@@ -1,0 +1,50 @@
+FROM python:3.11-slim
+
+# System packages: ffmpeg (recording), dnsmasq (DNS), vlc (audio recording),
+# GStreamer + PyGObject build deps (live HLS streaming)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    dnsmasq \
+    vlc \
+    libvlc-dev \
+    libcairo2-dev \
+    libgirepository1.0-dev \
+    gir1.2-gstreamer-1.0 \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    pkg-config \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY src/arlo-cam-api/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && \
+    # Several pinned packages use inspect functions removed in Python 3.11. Override with compatible versions:
+    #   wrapt==1.12.1      → uses inspect.formatargspec (removed 3.11)
+    #   python-vlc==3.0.11115 → uses inspect.getargspec (removed 3.11)
+    pip install --no-cache-dir 'wrapt>=1.14.0' 'python-vlc>=3.0.16004'
+
+# PyGObject for GStreamer HLS live streaming (optional).
+# Install build tools first so meson-python can find system libraries (libcairo, libgirepository).
+# Non-fatal: core motion recording uses ffmpeg and works without this.
+RUN pip install --no-cache-dir meson meson-python ninja pycairo && \
+    pip install --no-cache-dir --no-build-isolation PyGObject || \
+    echo "WARNING: PyGObject install failed - GStreamer live streaming unavailable"
+
+# Copy application source
+COPY src/arlo-cam-api/ .
+
+# Copy entrypoint (starts dnsmasq then Python)
+COPY docker/entrypoint-cam-api.sh /entrypoint-cam-api.sh
+RUN chmod +x /entrypoint-cam-api.sh
+
+EXPOSE 4000
+
+ENTRYPOINT ["/entrypoint-cam-api.sh"]

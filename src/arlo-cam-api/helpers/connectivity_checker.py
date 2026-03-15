@@ -5,7 +5,8 @@ import threading
 import time
 import logging
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'arlo.db')
+_BASE_DIR = os.environ.get('ARLO_DATA_DIR', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_PATH = os.path.join(_BASE_DIR, 'arlo.db')
 
 def check_arp(mac_address):
     """Check if MAC address is in ARP table"""

@@ -698,6 +698,30 @@ REGISTER_SET_INITIAL_ULTRA = {
         }
 }
 
+# Register set specific to VMC2030 / VMC2030B (Arlo Essential) cameras
+REGISTER_SET_INITIAL_VMC2030 = {
+        "Type": "registerSet",
+        "ID": -1,
+        "SetValues": {
+            "WifiCountryCode": "EU",
+            "VideoAntiFlickerRate": 50,
+            "NightVisionMode": True,
+            "MaxStreamTimeLimit": 1800,
+            "MaxUserStreamTimeLimit": 86400,
+            "MaxMotionStreamTimeLimit": 120,
+            "VideoOutputResolution": "1080p",
+            "VideoTargetBitrate": 1000,
+            "AlertBackoffTime": 0,
+            "PIRTargetState": "Armed",
+            "PIRStartSensitivity": 80,
+            "PIRAction": "Stream",
+            "AudioTargetState": "Disarmed",
+            "VideoMotionEstimationEnable": True,
+            "VideoMotionSensitivity": 80,
+            "DefaultMotionStreamTimeLimit": 10,
+        }
+}
+
 REGISTER_SET_INITIAL_SUBSCRIPTION = {
         "Type":"registerSet",
         "ID":-1,
